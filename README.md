@@ -5,5 +5,5 @@ The script solves the problem of accidental workbook deletion. If you have only 
 
 Features:
 - Uses threads for parallelism.
-- Can ыends data to Zabbix for monitoring.
+- Can sends data to Zabbix for monitoring.
 - Logs errors to Sentry.
