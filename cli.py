@@ -16,7 +16,7 @@ from logging.handlers import TimedRotatingFileHandler, RotatingFileHandler
 
 SCRIPT_HOME = os.path.dirname(os.path.realpath(__file__))
 SCRIPT_NAME = 'wb-backup2s3'
-CONFIG_FILE = os.path.join(SCRIPT_HOME, 'conf.toml')
+CONFIG_FILE = os.path.join(SCRIPT_HOME, 'config.toml')
 LOGFILE_PATH = os.path.join(SCRIPT_HOME, SCRIPT_NAME + '.log')
 
 ZAB_KEY_HEARTBEAT = 'wb-backup2s3.heartbeat'
