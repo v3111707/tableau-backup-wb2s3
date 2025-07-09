@@ -1,9 +1,15 @@
-#### A Python script that downloads workbooks from Tableau Server using the REST API and uploads them to AWS S3.
+# Tableau Workbook Backup to Amazon S3
 
-The script solves the problem of accidental workbook deletion. If you have only full TS backup , restoring a single deleted workbook requires deploying a full TS backup on new hardware, which is costly and time-consuming. The script automatically backups all workbooks from Tableau Server to an Amazon S3 Bucket.
+A Python script for automated backup of Tableau Server workbooks to Amazon S3.  
+The project was created to solve two problems:
+- long-term archival of selected Tableau projects for audit and retention needs  
+- self-service access to backup files for authorized users — without requiring administrator involvement
 
+## 🔧 Features
 
-Features:
-- Uses threads for parallelism.
-- Can sends data to Zabbix for monitoring.
-- Logs errors to Sentry.
+- Full-site backup of Tableau workbooks (`[backup.sites]`)
+- Selective backup of workbooks by project (`[[backup.projects]]`)
+- Multithreaded downloads and S3 uploads
+- Retry mechanism for failed operations
+- Error tracking via Sentry (optional)
+- Zabbix monitoring integration (heartbeat, metrics, error codes)
