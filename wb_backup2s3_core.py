@@ -5,7 +5,6 @@ import botocore
 import datetime
 import json
 import sentry_sdk
-import requests
 import functools
 import re
 from dataclasses import dataclass
@@ -57,7 +56,7 @@ def retry(_func=None, *, times=6):
         return decorator_retry(_func)
 
 
-def print_and_send_exceptions_senrty(func):
+def print_and_send_exceptions_sentry(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
@@ -76,11 +75,11 @@ class BackupWB2S3:
     Attributes
     ----------
     tableau_cred : tuple
-        tuple with tableau credentials
+        tableau credentials
         Example: (username, password, url)
 
     s3_creds : tuple
-        tuple with AWS credentials
+        AWS credentials
         Example: (key_id, access_key, bucket name)
 
     work_dir: str
@@ -108,17 +107,19 @@ class BackupWB2S3:
         self.successful_q = successful_q if successful_q else SimpleQueue()
         self.work_dir = work_dir
         self.current_site_name = None
-        self.project_id_path = None
+        self.project_id_path: dict = {}
+        self.projects_hierarchy: dict = {}
         self.user_id_username = None
+        self.bucket_name: dict = {}
         self.upload_state = {}
         self.wb_name_s3_object = {}
 
         tab_user, tab_pass, tab_url = tableau_cred
-        key_id, access_key, self.bucket_name = s3_creds
+        key_id, access_key = s3_creds
 
         add_breadcrumb(
             category='__init__',
-            message=f'TS: {tab_url=}, {tab_user=}\nS3: bucket_name "{self.bucket_name}"',
+            message=f'TS: {tab_url=}, {tab_user=}',
             level='info',
             type='debug',
         )
@@ -141,7 +142,7 @@ class BackupWB2S3:
             aws_access_key_id=key_id,
             aws_secret_access_key=access_key,
         )
-        self._fill_user_id_username()
+        # self._fill_user_id_username()
 
     def _get_wb_path(self, wb: WorkbookItem):
         return self.current_site_name + '/' + self.project_id_path[wb.project_id] + wb.name
@@ -153,13 +154,13 @@ class BackupWB2S3:
             ts_users += list(TSC.Pager(self.ts.users))
         self.user_id_username = {i.id: i.name for i in ts_users}
 
-    def _fill_project_id_path(self):
+    def _build_project_structure(self):
         all_projects = list(TSC.Pager(self.ts.projects))
         all_projects = {i.id: i for i in all_projects}
-        self.project_id_path = {}
-        for _, project in all_projects.items():
-            path = []
+        for project in all_projects.values():
             parent_id = project.parent_id
+            self.projects_hierarchy.setdefault(parent_id,[]).append(project.id)
+            path = []
             while True:
                 if parent_id:
                     path.append(all_projects[parent_id].name)
@@ -168,6 +169,15 @@ class BackupWB2S3:
                     break
             path.reverse()
             self.project_id_path[project.id] = '/'.join(path + [project.name]) + '/'
+
+    def _get_sub_projects(self, project_id: str):
+        resp = []
+        if self.projects_hierarchy.get(project_id):
+            resp.extend(self.projects_hierarchy.get(project_id))
+        for sub_project_id in self.projects_hierarchy.get(project_id, []):
+            resp.extend(self._get_sub_projects(sub_project_id))
+        return resp
+
 
     def _ts_get_all_sites(self):
         return list(TSC.Pager(self.ts.sites.get))
@@ -180,7 +190,7 @@ class BackupWB2S3:
 
             self.current_site_name = site[0].name
             self._s3_download_upload_state()
-            self._fill_project_id_path()
+            self._build_project_structure()
         else:
             self.logger.warning(f'Site {site_name} not found')
 
@@ -197,7 +207,7 @@ class BackupWB2S3:
             filepath=file_path,
         )
 
-    @print_and_send_exceptions_senrty
+    @print_and_send_exceptions_sentry
     def _do_backup(self, wb: WorkbookItem, include_extract: bool = True):
         wb_path = self._get_wb_path(wb)
 
@@ -261,13 +271,15 @@ class BackupWB2S3:
             else:
                 self.successful_q.put(workbook)
 
-    def run_backup(
+    def full_backup(
             self,
+            s3_bucket_name: str,
             site_names: list = None,
             last_modified_update_interval: int = 60,
             max_workers: int = 10,
             excluded_sites: list = []
     ):
+        self.logger.debug(f'Run run_sites_backup: {s3_bucket_name=}, {site_names=}, {excluded_sites=}, {last_modified_update_interval=}, {max_workers=}')
         ts_sites = [s for s in self._ts_get_all_sites() if s.name not in excluded_sites]
 
         if site_names:
@@ -277,6 +289,7 @@ class BackupWB2S3:
             self.backup_site(
                 site_name=site.name,
                 max_workers=max_workers,
+                s3_bucket_name = s3_bucket_name,
                 last_modified_update_interval=last_modified_update_interval,
             )
         return
@@ -285,14 +298,37 @@ class BackupWB2S3:
             self,
             site_name: str,
             max_workers: int,
-            last_modified_update_interval: int,
+            s3_bucket_name: str,
+            projects: list = [],
+            last_modified_update_interval: int = 60,
     ):
-        self.logger.info(f'#Backup site: "{site_name}"')
+        self.logger.info(f'#Backup site: "{site_name}" in to "{s3_bucket_name}", {projects=}')
+        if not self.user_id_username:
+            self._fill_user_id_username()
+        self.bucket_name = s3_bucket_name
         self._ts_switch_site(site_name)
+
+        project_ids_to_backup = []
+        if projects:
+            self.logger.info(f'Backup only next projects: "{projects}"')
+        for project_path in projects:
+            if not project_path.endswith('/'):
+                project_path = project_path + '/'
+
+            if not project_path in self.project_id_path.values():
+                self.logger.warning(f'Project "{project_path}" not found')
+            else:
+                project_id = [k for k,v in self.project_id_path.items() if v == project_path][0]
+                project_ids_to_backup.append(project_id)
+                sub_projects = self._get_sub_projects(project_id)
+                if sub_projects:
+                    project_ids_to_backup.extend(sub_projects)
 
         queue_to_backup = []
 
         all_wbs = self._ts_get_all_workbooks()
+        if projects:
+            all_wbs = [w for w in all_wbs if w.project_id in project_ids_to_backup]
         all_wbs_paths = [self._get_wb_path(w) for w in all_wbs]
 
         for wb_path, wb_data in [(k, v) for k, v in self.upload_state.items() if k not in all_wbs_paths]:
@@ -364,7 +400,7 @@ class BackupWB2S3:
                 "Tagging": parse.urlencode(tags)
             }
         self.logger.info(f' upload: {object_key} to {self.bucket_name}')
-        resp = self.s3.upload_file(**params)
+        self.s3.upload_file(**params)
 
     def _s3_list_all_objects_in_curr_ts_site(self):
         paginator = self.s3.get_paginator('list_objects_v2')
@@ -376,12 +412,12 @@ class BackupWB2S3:
         return all_objects
 
     @staticmethod
-    def convert_to_s3_compliant_tag(input: str, replacement_char='_'):
+    def convert_to_s3_compliant_tag(data: str, replacement_char='_'):
         allowed_pattern = r'[а-яА-Яa-zA-Z0-9 +\-=\.:/@]'
 
         output = ''.join(
             char if re.match(allowed_pattern, char) else replacement_char
-            for char in input
+            for char in data
         )
         return output
 
@@ -404,12 +440,12 @@ class BackupWB2S3:
 
     def _s3_update_last_modified(self, object_key: str):
         self.logger.debug(f'Update last_modified for {object_key}')
-        resp = self.s3.copy_object(
+        self.s3.copy_object(
             Bucket=self.bucket_name,
             CopySource={'Bucket': self.bucket_name, 'Key': object_key},
             Key=object_key
         )
-        # self.logger.debug(f'self.s3.copy_object resp: {resp}')
+        # self.logger.debug(f's3.copy_object resp: {resp}')
 
     @retry(times=3)
     def _s3_upload_upload_state(self):
