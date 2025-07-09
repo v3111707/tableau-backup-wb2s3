@@ -1,11 +1,26 @@
-[s3]
-s3_key_id = "**"
-s3_access_key = "**"
-s3_bucket_name = "**"
-[tableau]
-url = "**"
-username = "**"
-password = "**"
-[script]
-workdir = "**"
-senrty_dns = ""
+[main]
+workdir = "/var/opt/tableau/tableau_auto/wb-backup2s3/_tmp"
+max_workers=6
+#senrty_dns = "***"
+
+[creds.tableau]
+url = "https://tableau.company.com"
+user = "username"
+pass = "password"
+
+[creds.aws]
+access_key = "***"
+key_id = "****"
+
+[backup.sites]
+excluded_sites = [ "Site_name" ]
+s3_bucket_name = "tableau-full-wb-backup"
+
+[[backup.projects]]
+site = "Site1"
+projects = ["Archive"]
+bucket = "tableau-wb-archive"
+[[backup.projects]]
+site = "Site2"
+projects = ["Project_name/Archive", "Archive" ]
+bucket = "tableau-wb-archive"
