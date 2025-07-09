@@ -2,7 +2,7 @@
 
 A Python script for automated backup of Tableau Server workbooks to Amazon S3.  
 The project was created to solve two problems:
-- long-term archival of selected Tableau projects for audit and retention needs  
+- long-term archival of selected Tableau projects 
 - self-service access to backup files for authorized users — without requiring administrator involvement
 
 ## 🔧 Features
